@@ -1,0 +1,172 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: konqer-api
+  namespace: saas
+  labels:
+    app: konqer-api
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: konqer-api
+  template:
+    metadata:
+      labels:
+        app: konqer-api
+        version: v1
+    spec:
+      nodeSelector:
+        node-pool: saas
+      containers:
+      - name: api
+        image: registry.digitalocean.com/konqer/api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: database-url
+        - name: STRIPE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: stripe-secret
+        - name: STRIPE_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: stripe-webhook-secret
+        - name: STRIPE_FOUNDING_PRICE_ID
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: stripe-founding-price-id
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: openai-key
+        - name: APOLLO_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: apollo-key
+        - name: KEYCLOAK_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: keycloak-client-secret
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: konqer-secrets
+              key: jwt-public-key
+        - name: KEYCLOAK_SERVER_URL
+          value: "https://auth.konqer.app"
+        - name: KEYCLOAK_REALM
+          value: "konqer"
+        - name: KEYCLOAK_CLIENT_ID
+          value: "konqer-api"
+        - name: REDIS_URL
+          value: "redis://platform-pool-redis-master.platform:6379"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: konqer-api-svc
+  namespace: saas
+  labels:
+    app: konqer-api
+spec:
+  selector:
+    app: konqer-api
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: konqer-api-ingress
+  namespace: saas
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    konghq.com/strip-path: "false"
+    konghq.com/preserve-host: "true"
+spec:
+  ingressClassName: kong
+  tls:
+  - hosts:
+    - api.konqer.app
+    secretName: api-konqer-tls
+  rules:
+  - host: api.konqer.app
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: konqer-api-svc
+            port:
+              number: 8000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: konqer-api-hpa
+  namespace: saas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: konqer-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
